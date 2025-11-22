@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, send_file
+from flask_cors import CORS
 import torch
 from torchvision import transforms
 from PIL import Image, ImageOps
@@ -15,6 +16,7 @@ from datetime import datetime
 from gtts import gTTS
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}})
 
 class CurrencyReader:
     def __init__(self):
@@ -88,30 +90,36 @@ class CurrencyReader:
         return Image.new('L', (28, 28), 0)
 
     def predict_digit(self, image_array):
-        try:
-            processed_img = self.preprocess_digit(image_array)
-            
-            # Convert to tensor and normalize
-            transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-            ])
-            img_tensor = transform(processed_img).unsqueeze(0)
-
-            with torch.no_grad():
-                output = self.model(img_tensor)
-                probabilities = torch.softmax(output, dim=1)
-                confidence, predicted = torch.max(probabilities, 1)
-                
-                # Print debug information
-                print(f"Predicted digit: {predicted.item()}, Confidence: {confidence.item()}")
-                
-                # Lower the confidence threshold for better recognition
-                if confidence.item() > 0.01:  # Further reduced threshold
-                    return str(predicted.item()), confidence.item()
+        # First check if the image is empty
+        if isinstance(image_array, np.ndarray):
+            # Check if the image is all black or all white
+            if np.all(image_array == 0) or np.all(image_array == 255):
                 return None, 0.0
-        except Exception as e:
-            print(f"Error in predict_digit: {str(e)}")
+            
+            # Check if the image has any non-zero pixels
+            non_zero_pixels = np.sum(image_array > 0)
+            if non_zero_pixels < 200:  # Significantly increased threshold
+                return None, 0.0
+
+            # Check if the image has enough contrast
+            if np.std(image_array) < 50:  # Add contrast check
+                return None, 0.0
+
+        processed_img = self.preprocess_digit(image_array)
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ])
+        img_tensor = transform(processed_img).unsqueeze(0)
+
+        with torch.no_grad():
+            output = self.model(img_tensor)
+            probabilities = torch.softmax(output, dim=1)
+            confidence, predicted = torch.max(probabilities, 1)
+            
+            # Only return a digit if confidence is very high
+            if confidence.item() > 0.9:  # Increased confidence threshold
+                return str(predicted.item()), confidence.item()
             return None, 0.0
 
     def text_to_speech(self, text, language):
@@ -326,7 +334,16 @@ def speak():
         audio_file = reader.text_to_speech(text, language)
         
         if audio_file:
-            return send_file(audio_file, mimetype='audio/mp3')
+            try:
+                # Send the file and then delete it
+                response = send_file(audio_file, mimetype='audio/mp3')
+                response.call_on_close(lambda: os.unlink(audio_file))
+                return response
+            except Exception as e:
+                # Clean up the file if there's an error
+                if os.path.exists(audio_file):
+                    os.unlink(audio_file)
+                raise e
         else:
             return jsonify({'success': False, 'message': 'Failed to generate speech'})
             
@@ -336,121 +353,75 @@ def speak():
 @app.route('/scan', methods=['POST'])
 def scan_check():
     try:
-        # Get image data from request
         data = request.get_json()
-        image_data = data['image'].split(',')[1]
-        num_digits = int(data.get('num_digits', 1))
+        if not data or 'image' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'No image data provided'
+            })
+
+        # Get the selected language
         language = data.get('language', 'English')
         
         # Decode base64 image
+        image_data = data['image'].split(',')[1]
         image_bytes = base64.b64decode(image_data)
         image = Image.open(io.BytesIO(image_bytes))
         
-        # Convert PIL Image to OpenCV format
-        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        # Convert to grayscale
+        image = image.convert('L')
+        img_array = np.array(image)
         
-        # Check if this is a digit drawing or a check image
-        if num_digits > 0:  # This is a digit drawing
-            # Convert to grayscale
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Get number of digits to recognize
+        num_digits = int(data.get('num_digits', 3))
+        
+        # Process each digit
+        predictions = []
+        confidences = []
+        
+        # Calculate digit width
+        digit_width = img_array.shape[1] // num_digits
+        
+        for i in range(num_digits):
+            start_x = i * digit_width
+            end_x = (i + 1) * digit_width
             
-            # For single digit, use the entire image
-            if num_digits == 1:
-                # Invert the image for better digit detection
-                gray = 255 - gray
-                digit, conf = reader.predict_digit(gray)
-                if digit is not None:
-                    # Create complete sentence based on language
-                    amount_text = get_amount_text(digit, language)
-                    return jsonify({
-                        'success': True,
-                        'amount': str(digit),
-                        'amount_text': amount_text,
-                        'confidence_scores': [conf],
-                        'language': language
-                    })
-                else:
-                    return jsonify({
-                        'success': False,
-                        'message': 'Please write the digit more clearly',
-                        'partial_result': '?',
-                        'confidence_scores': [0.0]
-                    })
+            # Extract digit region
+            digit_region = img_array[:, start_x:end_x]
             
-            # For multiple digits, split the image
-            digit_width = gray.shape[1] // num_digits
-            predictions = []
-            confidences = []
+            # Invert the image for better digit detection
+            digit_region = 255 - digit_region
             
-            for i in range(num_digits):
-                start_x = i * digit_width
-                end_x = (i + 1) * digit_width
-                digit_section = gray[:, start_x:end_x]
-                
-                # Invert each digit section
-                digit_section = 255 - digit_section
-                
-                # Predict each digit
-                digit, conf = reader.predict_digit(digit_section)
-                if digit is not None:
-                    predictions.append(digit)
-                    confidences.append(conf)
-                else:
-                    predictions.append("?")
-                    confidences.append(0.0)
+            # Predict digit
+            digit, confidence = reader.predict_digit(digit_region)
             
-            result = ''.join(predictions)
-            if "?" not in predictions:
-                # Create complete sentence based on language
-                amount_text = get_amount_text(result, language)
-                return jsonify({
-                    'success': True,
-                    'amount': result,
-                    'amount_text': amount_text,
-                    'confidence_scores': confidences,
-                    'language': language
-                })
+            if digit is not None:
+                predictions.append(digit)
+                confidences.append(confidence)
             else:
-                return jsonify({
-                    'success': False,
-                    'message': 'Please write digits more clearly',
-                    'partial_result': ' '.join(predictions),
-                    'confidence_scores': confidences
-                })
+                predictions.append("?")
+                confidences.append(0.0)
         
-        # If not a digit drawing, process as a check
-        processed_image = scanner.preprocess_image(image)
-        
-        if processed_image is None:
+        # If we have predictions, generate the amount text
+        amount_text = None
+        if predictions and "?" not in predictions:
+            amount = ''.join(predictions)
+            amount_text = get_amount_text(amount, language)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Digits recognized successfully.',
+                'amount': amount,
+                'amount_text': amount_text,
+                'language': language,
+                'confidence_scores': confidences
+            })
+        else:
             return jsonify({
                 'success': False,
-                'message': 'Could not detect check in the image. Please try again.'
+                'message': 'Could not recognize digits. Please try again.'
             })
-        
-        # Convert processed image back to base64
-        _, buffer = cv2.imencode('.jpg', processed_image)
-        processed_image_data = base64.b64encode(buffer).decode('utf-8')
-        
-        # Generate speech for the amount
-        amount_text = "The amount is 1000 rupees"  # Replace with actual amount
-        audio_file = reader.text_to_speech(amount_text, language)
-        
-        if audio_file:
-            # Play the audio
-            try:
-                playsound(audio_file)
-                # Clean up the temporary file
-                os.unlink(audio_file)
-            except Exception as e:
-                print(f"Error playing audio: {str(e)}")
-        
-        return jsonify({
-            'success': True,
-            'message': 'Check detected and processed successfully.',
-            'image': f'data:image/jpeg;base64,{processed_image_data}',
-            'amount': amount_text
-        })
-        
+            
     except Exception as e:
         print(f"Error in scan_check: {str(e)}")  # Add debug logging
         return jsonify({
@@ -462,15 +433,24 @@ def get_amount_text(amount, language):
     """Generate the complete sentence for the amount in the specified language."""
     amount_texts = {
         'English': f"The amount is {amount} rupees",
-        'Hindi': f"राशि {amount} रुपये ",
-        'Marathi': f"रक्कम {amount} रुपये",
+        'Hindi': f"राशि {amount} रुपये है",
+        'Marathi': f"रक्कम {amount} रुपये आहे",
         'Spanish': f"La cantidad es {amount} rupias",
         'French': f"Le montant est de {amount} roupies",
         'German': f"Der Betrag ist {amount} Rupien",
         'Japanese': f"金額は{amount}ルピーです",
         'Chinese': f"金额是{amount}卢比"
     }
-    return amount_texts.get(language, amount_texts['English'])
+    
+    # Format the amount with commas for better readability
+    try:
+        formatted_amount = "{:,}".format(int(amount))
+    except ValueError:
+        formatted_amount = amount
+        
+    # Get the base text and replace the amount placeholder
+    base_text = amount_texts.get(language, amount_texts['English'])
+    return base_text.replace(amount, formatted_amount)
 
 if __name__ == '__main__':
     app.run(debug=True) 

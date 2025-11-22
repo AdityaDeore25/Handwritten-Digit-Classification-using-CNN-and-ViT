@@ -1,0 +1,25 @@
+:root{--bg1:#f5f7fa;--bg2:#c3cfe2;--text:#2c3e50;--muted:#7f8c8d;--primary:#3498db;--primary2:#6c5ce7}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{margin:0;font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;background:linear-gradient(135deg,var(--bg1),var(--bg2))}
+.hero{min-height:60vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:3rem 1rem}
+.hero-title{font-size:clamp(2rem,4vw,3rem);font-weight:800;color:var(--text);opacity:0;animation:fadeUp .8s ease forwards .1s}
+.hero-subtitle{font-size:clamp(1rem,2.2vw,1.25rem);color:#556371;max-width:800px;margin:.75rem auto 0;opacity:0;animation:fadeUp .8s ease forwards .25s}
+.hero-badges{display:flex;gap:10px;justify-content:center;margin-top:1rem;opacity:0;animation:fadeUp .8s ease forwards .5s}
+.hero-badge{background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.05);padding:6px 12px;border-radius:999px;font-size:.9rem;color:var(--text)}
+.btn{border:none;border-radius:12px;padding:.9rem 1.6rem;font-weight:700;cursor:pointer}
+.cta-btn{background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff;box-shadow:0 10px 20px rgba(52,152,219,.25);margin-top:1.5rem;display:inline-block;opacity:0;animation:fadeUp .8s ease forwards .4s, floaty 3s ease-in-out infinite 1.2s}
+.card-like{max-width:1100px;margin:40px auto;background:rgba(255,255,255,.9);border-radius:20px;box-shadow:0 8px 32px rgba(31,38,135,.15);padding:24px}
+.header h2{margin:0 0 .5rem;color:var(--text)}
+.header p{margin:0;color:var(--muted)}
+.canvas-wrap{background:#000;border-radius:16px;overflow:hidden;margin-top:16px}
+canvas{display:block;width:100%;height:220px}
+.controls-row{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-top:16px}
+.buttons-row{display:flex;gap:12px;margin-top:12px}
+.btn.primary{background:var(--primary);color:#fff}
+.result{margin-top:16px}
+.msg{font-weight:700;color:#28a745}
+.conf{color:var(--muted);margin-top:4px}
+@keyframes fadeUp{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes floaty{0%{transform:translateY(0)}50%{transform:translateY(-4px)}100%{transform:translateY(0)}}
+
